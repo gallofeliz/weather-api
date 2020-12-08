@@ -1,6 +1,6 @@
 FROM python:alpine
 
-RUN pip install meteofrance_api
+RUN pip install meteofrance_api python-dateutil
 
 WORKDIR /app
 

@@ -2,6 +2,7 @@
 
 from meteofrance_api import MeteoFranceClient
 import requests, time, datetime, dateutil.parser, socketserver, http.server, urllib.parse, json, os
+import traceback
 
 """
   Weather Model (Providers provides what they can) that can be graphed
@@ -114,7 +115,7 @@ class OpenWeatherMapProvider():
         return {
             'timestamp': resp['dt'],
             'temperature': round(resp['main']['temp'], 1),
-            'humidity': round(resp['main']['humidity']),
+            'humidity': round(resp['main']['humidity']), # None in some cases ??? WTF Meteofrance
             'wind': round(resp['wind']['speed'] * 3.6),
             'windGust': round(resp['wind']['gust'] * 3.6 if 'gust' in resp['wind'] else resp['wind']['speed'] * 3.6),
             'cloudiness': round(resp['clouds']['all']),
@@ -139,6 +140,9 @@ class OpenWeatherMapProvider():
 
         print('openweathermap current api response', resp)
 
+        if int(resp.get('cod')) != 200:
+            raise Exception('openweathermap error')
+
         return resp
 
 class WeatherService():
@@ -160,7 +164,7 @@ class WeatherService():
           try:
             values[providerName] = getattr(self.providers[providerName], type)(latitude, longitude)
           except Exception as e:
-            print(str(e))
+            traceback.print_exc()
             errors.append(providerName)
 
         return {
@@ -186,11 +190,11 @@ for k, v in os.environ.items():
     if k[0:9] == 'LOCATION_':
         location = v.split(',')
         if len(location) != 2:
-            raise BaseException('Invalid lat long')
+            raise Exception('Invalid lat long')
         locations[k[9:].lower()] = location
 
 if not locations:
-    raise BaseException('Empty locations')
+    raise Exception('Empty locations')
 
 default = os.environ.get('DEFAULT_LOCATION', list(locations.keys())[0])
 
@@ -204,8 +208,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         path_parts = sMac.split('/')
-
-        print(path_parts)
 
         type = path_parts[0] if path_parts[0] != '' else 'current'
         location_alias = path_parts[1] if len(path_parts) > 1 else default
@@ -238,7 +240,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type','text/html')
             self.end_headers()
             self.wfile.write(bytes(str(inst), 'utf8'))
-            print('ERROR ' + str(inst))
+            traceback.print_exc()
 
 httpd = socketserver.TCPServer(('', 8080), Handler)
 try:
