@@ -1,8 +1,8 @@
 from meteofrance_api import MeteoFranceClient
-import requests, time, datetime, dateutil.parser, socketserver, http.server, urllib.parse, json
+import requests, time, datetime, dateutil.parser, socketserver, http.server, urllib.parse, json, os
 
 """
-  Weather Model (Providers provides what they can)
+  Weather Model (Providers provides what they can) that can be graphed
   - timestamp:int - data time
   - civilDaylight:boolean - if it's the day from civil twilights
   - temperature:float - temperature °c 1 decimal
@@ -10,8 +10,8 @@ import requests, time, datetime, dateutil.parser, socketserver, http.server, url
   - wind:int - Wind km/h
   - windGust:int - Wind Gust km/h
   - cloudiness:int - Cloudiness %
-  - rain1h/rain3h/rain6h:float - rain for 1h or 3h or 6h in mm 1 decimal
-  - snow1h/snow3h/rain6h:float - like rain but for snow
+  - rain:float - rain mm/h 1 decimal
+  - snow:float - like rain but for snow
   - icon:string - a full url for an icon
   - description: string - an human description
 """
@@ -64,13 +64,18 @@ class MeteoFranceProvider():
                 # No other for current ... ???
             },
             **({
-                # Values depends on forecast granularity ; putting None to "unset" previous values (TODO check if relevant with my influxdb)
-                'rain1h': round(resp['rain']['1h'], 1) if '1h' in resp['rain'] else None,
-                'snow1h': round(resp['snow']['1h'], 1) if '1h' in resp['snow'] else None,
-                'rain3h': round(resp['rain']['3h'], 1) if '3h' in resp['rain'] else None,
-                'snow3h': round(resp['snow']['3h'], 1) if '3h' in resp['snow'] else None,
-                'rain6h': round(resp['rain']['6h'], 1) if '6h' in resp['rain'] else None,
-                'snow6h': round(resp['snow']['6h'], 1) if '6h' in resp['snow'] else None,
+                'rain': round(
+                    resp['rain'].get('1h', .0) or
+                    resp['rain'].get('3h', .0) / 3 or
+                    resp['rain'].get('6h', .0) / 6
+                    , 1
+                ),
+                'snow': round(
+                    resp['snow'].get('1h', .0) or
+                    resp['snow'].get('3h', .0) / 3 or
+                    resp['snow'].get('6h', .0) / 6
+                    , 1
+                ),
                 'cloudiness': round(resp['clouds']),
                 'icon': 'https://meteofrance.com/modules/custom/mf_tools_common_theme_public/svg/weather/%s.svg' % resp['weather']['icon'],
                 'description': resp['weather']['desc']
@@ -105,27 +110,23 @@ class OpenWeatherMapProvider():
         return values
     def __map(self, resp, type):
         return {
-            **{
-                'timestamp': resp['dt'],
-                'temperature': round(resp['main']['temp'], 1),
-                'humidity': round(resp['main']['humidity']),
-                'wind': round(resp['wind']['speed'] * 3.6),
-                'windGust': round(resp['wind']['gust'] * 3.6 if 'gust' in resp['wind'] else resp['wind']['speed'] * 3.6),
-                'cloudiness': round(resp['clouds']['all']),
-                'icon': 'https://openweathermap.org/img/wn/%s@2x.png' % resp['weather'][0]['icon'],
-                'description': resp['weather'][0]['description']
-            },
-            **(
-                # Missing value equals to 0
-                {
-                    'rain3h': round(resp['rain']['3h'], 1) if 'rain' in resp and '3h' in resp['rain'] else 0.00,
-                    'snow3h': round(resp['snow']['3h'], 1) if 'snow' in resp and '3h' in resp['snow'] else 0.00
-                }
-                if type == 'forecast' else
-                {
-                    'rain1h': round(resp['rain']['1h'], 1) if 'rain' in resp and '1h' in resp['rain'] else 0.00,
-                    'snow1h': round(resp['snow']['1h'], 1) if 'snow' in resp and '1h' in resp['snow'] else 0.00
-                }
+            'timestamp': resp['dt'],
+            'temperature': round(resp['main']['temp'], 1),
+            'humidity': round(resp['main']['humidity']),
+            'wind': round(resp['wind']['speed'] * 3.6),
+            'windGust': round(resp['wind']['gust'] * 3.6 if 'gust' in resp['wind'] else resp['wind']['speed'] * 3.6),
+            'cloudiness': round(resp['clouds']['all']),
+            'icon': 'https://openweathermap.org/img/wn/%s@2x.png' % resp['weather'][0]['icon'],
+            'description': resp['weather'][0]['description'],
+            'rain': round(
+                resp.get('rain', {}).get('rain1h', .0) or
+                resp.get('rain', {}).get('rain3h', .0) / 3
+              , 1
+            ),
+            'snow': round(
+                resp.get('snow', {}).get('snow1h', .0) or
+                resp.get('snow', {}).get('snow3h', .0) / 3
+              , 1
             )
         }
     def __call(self, latitude, longitude, type):
@@ -173,9 +174,23 @@ class WeatherService():
 
 weather = WeatherService({
     'meteoFrance': MeteoFranceProvider(),
-    'openWeatherMap': OpenWeatherMapProvider('xxx'),
+    'openWeatherMap': OpenWeatherMapProvider(os.environ['OPENWEATHERMAP_APPID']),
     'sunriseSunset': SunriseSunsetProvider()
 })
+
+locations = {}
+
+for k, v in os.environ.items():
+    if k[0:9] == 'LOCATION_':
+        location = v.split(',')
+        if len(location) != 2:
+            raise BaseException('Invalid lat long')
+        locations[k[9:].lower()] = location
+
+if not locations:
+    raise BaseException('Empty locations')
+
+default = os.environ.get('DEFAULT_LOCATION', list(locations.keys())[0])
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -186,18 +201,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             print('Skipped')
             return
 
-        if (sMac == ''):
-            sMac = 'current'
+        path_parts = sMac.split('/')
 
-        if (sMac != 'current' and sMac != 'forecast'):
+        print(path_parts)
+
+        type = path_parts[0] if path_parts[0] != '' else 'current'
+        location_alias = path_parts[1] if len(path_parts) > 1 else default
+
+        if (type != 'current' and type != 'forecast'):
             self.send_response(404)
             self.end_headers()
+            self.wfile.write(bytes(str('Invalid type'), 'utf8'))
+            return
+
+        if (location_alias not in list(locations.keys())):
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(bytes(str('Invalid location'), 'utf8'))
+            return
+
+        location = locations[location_alias]
 
         try:
-            if sMac == 'current':
-                data = weather.get_current(49.1349243, 1.4400054, 'home')
+            if type == 'current':
+                data = weather.get_current(location[0], location[1], location_alias)
             else:
-                data = weather.get_forecast(49.1349243, 1.4400054, 'home')
+                data = weather.get_forecast(location[0], location[1], location_alias)
             self.send_response(200)
             self.send_header('Content-type','application/json')
             self.end_headers()
