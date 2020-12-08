@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from meteofrance_api import MeteoFranceClient
 import requests, time, datetime, dateutil.parser, socketserver, http.server, urllib.parse, json, os
 
