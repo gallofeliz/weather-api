@@ -1,22 +1,32 @@
 from meteofrance_api import MeteoFranceClient
-import requests
+import requests, time, datetime, dateutil.parser, socketserver, http.server, urllib.parse, json
 
-NAME='home'
-LAT=49.1349243
-LON=1.4400054
-owmAppId = 'xxxxx'
+class SunriseSunset():
+    def current(self, latitude, longitude):
+        resp = requests.get(
+            'https://api.sunrise-sunset.org/json',
+            params={'lat': latitude, 'lng': longitude, 'formatted': '0'}
+        ).json()['results']
 
-#https://docs.breezometer.com/api-documentation/weather-api/v1/#example
-#https://darksky.net/dev/docs
-#https://api.meteo-concept.com/documentation#forecast-city-day
+        print('sunrisesunset current api response', resp)
+
+        ts = int(round(time.time()))
+
+        civilSunrise = int(datetime.datetime.timestamp(dateutil.parser.parse(resp['civil_twilight_begin'])))
+        civilSunset = int(datetime.datetime.timestamp(dateutil.parser.parse(resp['civil_twilight_end'])))
+
+        return {
+            'timestamp': ts,
+            'civilDaylight': True if ts > civilSunrise and ts < civilSunset else False
+        }
 
 class MeteoFranceWeather():
-    def current(self):
+    def current(self, latitude, longitude):
         client = MeteoFranceClient()
         resp = client.session.request(
             'get',
             'current',
-            params={'lat': LAT, 'lon': LON, 'lang': 'fr'},
+            params={'lat': latitude, 'lon': longitude, 'lang': 'fr'},
         ).json()
 
         print('meteofrance current api response', resp)
@@ -31,10 +41,10 @@ class MeteoFranceWeather():
         }
 
 class OpenWeatherMap():
-    def current(self):
+    def current(self, latitude, longitude):
         resp = requests.get(
             'http://api.openweathermap.org/data/2.5/weather',
-            params={'appid': owmAppId, 'units': 'metric', 'lat': LAT, 'lon': LON, 'lang': 'fr'}
+            params={'appid': 'xxx', 'units': 'metric', 'lat': latitude, 'lon': longitude, 'lang': 'fr'}
         ).json()
 
         print('openweathermap current api response', resp)
@@ -49,36 +59,86 @@ class OpenWeatherMap():
             'rain1h': round(resp['rain']['1h'], 2) if 'rain' in resp and '1h' in resp['rain'] else 0.00,
             'snow1h': round(resp['snow']['1h'], 2) if 'snow' in resp and '1h' in resp['snow'] else 0.00,
             'icon': 'http://openweathermap.org/img/wn/%s@2x.png' % resp['weather'][0]['icon'],
-            'desc': resp['weather']['description']
-
-            #daylight, sunset, sunrise
-            # https://api.sunrise-sunset.org/json?formatted=0&lat=49.1349243&lng=1.4400054
-
-            # ts = int(round(time.time()))
-            # time_ = meteo['dt']
-
-            # fields = get_fields_from_owm_entry(meteo)
-
-            # suntimes = requests.get(
-            #   'https://api.sunrise-sunset.org/json',
-            #   params={'lat': '49.1326634', 'lng': '1.4417597', 'formatted': '0'}
-            # ).json()['results']
-
-            # sunrise = int(datetime.datetime.timestamp(dateutil.parser.parse(suntimes['civil_twilight_begin'])))
-            # sunset = int(datetime.datetime.timestamp(dateutil.parser.parse(suntimes['civil_twilight_end'])))
-
-            # day = True if ts > sunrise and ts < sunset else False
-
+            'desc': resp['weather'][0]['description']
         }
 
-meteofrance = MeteoFranceWeather()
-openweathermap = OpenWeatherMap()
+class Weather():
+    def __init__(self, providers):
+        self.providers = providers
 
-print({
-    'type': 'current',
-    'profile': NAME,
-    'latitude': LAT,
-    'longitude': LON,
-    'meteofrance': meteofrance.current(),
-    'openweathermap': openweathermap.current()
+    # use of position object instead of three args ?
+    def __read(self, type, latitude, longitude, location_alias):
+        values = {}
+        errors = []
+
+        for providerName in self.providers:
+          try:
+            values[providerName] = getattr(self.providers[providerName], type)(latitude, longitude)
+          except Exception as e:
+            print(e)
+            errors.append(providerName)
+
+        return {
+          'type': type,
+          'location': {
+              'latitude': latitude,
+              'longitude': longitude,
+              'alias': location_alias
+          },
+          'values': values,
+          'errors': errors
+        }
+
+    def get_current(self, latitude, longitude, location_alias):
+        return self.__read('current', latitude, longitude, location_alias)
+
+    def get_forecast(self, latitude, longitude, location_alias):
+        return self.__read('forecast', latitude, longitude, location_alias)
+
+
+weather = Weather({
+    'meteoFrance': MeteoFranceWeather(),
+    'openWeatherMap': OpenWeatherMap(),
+    'sunriseSunset': SunriseSunset()
 })
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        sMac = urllib.parse.urlparse(self.path).path[1:]
+        print('Requested ' + sMac)
+
+        if (sMac == 'favicon.ico'):
+            print('Skipped')
+            return
+
+        if (sMac == ''):
+            sMac = 'current'
+
+        if (sMac != 'current' and sMac != 'forecast'):
+            self.send_response(404)
+            self.end_headers()
+
+        try:
+            if sMac == 'current':
+                data = weather.get_current(49.1349243, 1.4400054, 'home')
+            else:
+                data = weather.get_current(49.1349243, 1.4400054, 'home')
+            self.send_response(200)
+            self.send_header('Content-type','application/json')
+            self.end_headers()
+            self.wfile.write(bytes(json.dumps(data), 'utf8'))
+        except Exception as inst:
+            self.send_response(500)
+            self.send_header('Content-type','text/html')
+            self.end_headers()
+            self.wfile.write(bytes(str(inst), 'utf8'))
+            print('ERROR ' + str(inst))
+
+httpd = socketserver.TCPServer(('', 8081), Handler)
+try:
+   print('Listening')
+   httpd.serve_forever()
+except KeyboardInterrupt:
+   pass
+httpd.server_close()
+print('Ended')
