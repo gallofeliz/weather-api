@@ -1,0 +1,26 @@
+version: "3.5"
+
+services:
+  collector:
+    restart: unless-stopped
+    build:
+      context: .
+    environment:
+      OPENWEATHERMAP_APPID: blabla
+      LOCATION_HOLIDAYS: 43.2149438,5.4297272
+      LOCATION_HOME: 48.8793772,2.3429125
+      COLLECT_FREQUENCY_CURRENT: 15m
+      COLLECT_FREQUENCY_FORECAST: 3h
+      INFLUXDB_HOST: database
+      INFLUXDB_DB: dbtest
+      INFLUXDB_MEASUREMENT: test
+  database:
+    restart: unless-stopped
+    image: influxdb
+    environment:
+      INFLUXDB_DB: dbtest
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "5"
+        max-size: "20m"

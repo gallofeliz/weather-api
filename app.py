@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
 from meteofrance_api import MeteoFranceClient
-import requests, time, datetime, dateutil.parser, socketserver, http.server, urllib.parse, json, os
-import traceback
+import requests, time, datetime, dateutil.parser, os, re
+import traceback, logging, threading
+from influxdb import InfluxDBClient
 
 """
   Weather Model (Providers provides what they can) that can be graphed
@@ -60,25 +61,25 @@ class MeteoFranceProvider():
         return {
             **{
                 'timestamp': resp['dt'],
-                'temperature': round(resp['T']['value'], 1),
+                'temperature': float(round(resp['T']['value'], 1)),
                 'humidity': round(resp['humidity']),
                 'wind': round(resp['wind']['speed'] * 3.6),
                 'windGust': round(resp['wind']['gust'] * 3.6 if resp['wind']['gust'] != 0 else resp['wind']['speed'] * 3.6)
                 # No other for current ... ???
             },
             **({
-                'rain': round(
+                'rain': float(round(
                     resp['rain'].get('1h', .0) or
                     resp['rain'].get('3h', .0) / 3 or
                     resp['rain'].get('6h', .0) / 6
                     , 1
-                ),
-                'snow': round(
+                )),
+                'snow': float(round(
                     resp['snow'].get('1h', .0) or
                     resp['snow'].get('3h', .0) / 3 or
                     resp['snow'].get('6h', .0) / 6
                     , 1
-                ),
+                )),
                 'cloudiness': round(resp['clouds']),
                 'icon': 'https://meteofrance.com/modules/custom/mf_tools_common_theme_public/svg/weather/%s.svg' % resp['weather']['icon'],
                 'description': resp['weather']['desc']
@@ -114,23 +115,23 @@ class OpenWeatherMapProvider():
     def __map(self, resp, type):
         return {
             'timestamp': resp['dt'],
-            'temperature': round(resp['main']['temp'], 1),
+            'temperature': float(round(resp['main']['temp'], 1)),
             'humidity': round(resp['main']['humidity']), # None in some cases ??? WTF Meteofrance
             'wind': round(resp['wind']['speed'] * 3.6),
             'windGust': round(resp['wind']['gust'] * 3.6 if 'gust' in resp['wind'] else resp['wind']['speed'] * 3.6),
             'cloudiness': round(resp['clouds']['all']),
             'icon': 'https://openweathermap.org/img/wn/%s@2x.png' % resp['weather'][0]['icon'],
             'description': resp['weather'][0]['description'],
-            'rain': round(
+            'rain': float(round(
                 resp.get('rain', {}).get('rain1h', .0) or
                 resp.get('rain', {}).get('rain3h', .0) / 3
               , 1
-            ),
-            'snow': round(
+            )),
+            'snow': float(round(
                 resp.get('snow', {}).get('snow1h', .0) or
                 resp.get('snow', {}).get('snow3h', .0) / 3
               , 1
-            )
+            ))
         }
     def __call(self, latitude, longitude, type):
         resp = requests.get(
@@ -149,40 +150,36 @@ class WeatherService():
     def __init__(self, providers):
         self.providers = providers
 
-    def get_current(self, latitude, longitude, location_alias):
-        return self.__read('current', latitude, longitude, location_alias)
+    def get_current(self, latitude, longitude):
+        return self.__read('current', latitude, longitude)
 
-    def get_forecast(self, latitude, longitude, location_alias):
-        return self.__read('forecast', latitude, longitude, location_alias)
+    def get_forecast(self, latitude, longitude):
+        return self.__read('forecast', latitude, longitude)
 
     # use of position object instead of three args ?
-    def __read(self, type, latitude, longitude, location_alias):
+    def __read(self, type, latitude, longitude):
         values = {}
-        errors = []
 
         for providerName in self.providers:
           try:
             values[providerName] = getattr(self.providers[providerName], type)(latitude, longitude)
           except Exception as e:
             traceback.print_exc()
-            errors.append(providerName)
 
-        return {
-          'type': type,
-          'location': {
-              'latitude': latitude,
-              'longitude': longitude,
-              'alias': location_alias
-          },
-          'values': values,
-          'errors': errors
-        }
+        return values
 
-weather = WeatherService({
+logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(message)s')
+
+weather_service = WeatherService({
     'meteoFrance': MeteoFranceProvider(),
     'openWeatherMap': OpenWeatherMapProvider(os.environ['OPENWEATHERMAP_APPID']),
     'sunriseSunset': SunriseSunsetProvider()
 })
+
+seconds_per_unit = {"s": 1, "m": 60, "h": 3600}
+
+def convert_to_seconds(duration):
+    return int(duration[:-1]) * seconds_per_unit[duration[-1]]
 
 locations = {}
 
@@ -196,57 +193,57 @@ for k, v in os.environ.items():
 if not locations:
     raise Exception('Empty locations')
 
-default = os.environ.get('DEFAULT_LOCATION', list(locations.keys())[0])
+collect_frequency=os.environ['COLLECT_FREQUENCY_CURRENT']
+collect_frequency_s=convert_to_seconds(collect_frequency)
 
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        sMac = urllib.parse.urlparse(self.path).path[1:]
-        print('Requested ' + sMac)
+collect_frequency_forecast=os.environ['COLLECT_FREQUENCY_FORECAST']
+collect_frequency_forecast_s=convert_to_seconds(collect_frequency)
 
-        if (sMac == 'favicon.ico'):
-            print('Skipped')
-            return
+influxdb_client = InfluxDBClient(os.environ['INFLUXDB_HOST'], database=os.environ['INFLUXDB_DB'])
+influxdb_measurement = os.environ['INFLUXDB_MEASUREMENT']
 
-        path_parts = sMac.split('/')
+def collect(type, frequency):
+    threading.Timer(frequency, collect, ('current', collect_frequency_s)).start()
+    logging.info('Collecting ' + type)
 
-        type = path_parts[0] if path_parts[0] != '' else 'current'
-        location_alias = path_parts[1] if len(path_parts) > 1 else default
-
-        if (type != 'current' and type != 'forecast'):
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(bytes(str('Invalid type'), 'utf8'))
-            return
-
-        if (location_alias not in list(locations.keys())):
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(bytes(str('Invalid location'), 'utf8'))
-            return
-
-        location = locations[location_alias]
-
+    for location, coordinates in locations.items():
         try:
-            if type == 'current':
-                data = weather.get_current(location[0], location[1], location_alias)
-            else:
-                data = weather.get_forecast(location[0], location[1], location_alias)
-            self.send_response(200)
-            self.send_header('Content-type','application/json')
-            self.end_headers()
-            self.wfile.write(bytes(json.dumps(data), 'utf8'))
-        except Exception as inst:
-            self.send_response(500)
-            self.send_header('Content-type','text/html')
-            self.end_headers()
-            self.wfile.write(bytes(str(inst), 'utf8'))
-            traceback.print_exc()
+            logging.info('Collecting location ' + location)
+            weather = getattr(weather_service, 'get_' + type)(coordinates[0], coordinates[1])
+            points = []
 
-httpd = socketserver.TCPServer(('', 8080), Handler)
-try:
-   print('Listening')
-   httpd.serve_forever()
-except KeyboardInterrupt:
-   pass
-httpd.server_close()
-print('Ended')
+            for provider, values in weather.items():
+
+                def value_to_point(value):
+                    ts = value['timestamp']
+                    del value['timestamp']
+
+                    points.append({
+                        'measurement': influxdb_measurement,
+                        'tags': {
+                          'provider': provider
+                        },
+                        'time': ts,
+                        'fields': value
+                    })
+
+                if type == 'forecast':
+                    for value in values:
+                        value_to_point(value)
+                else:
+                    value_to_point(values)
+
+            logging.info(points)
+
+            influxdb_client.write_points(points, tags={
+                'location': location,
+                'type': type
+            }, time_precision='s')
+
+            logging.info('Done')
+        except Exception as e:
+            traceback.print_exc()
+            logging.error('Error collecting location %s for type %s (%s)', location, type, e)
+
+threading.Timer(0, collect, ('current', collect_frequency_s)).start()
+threading.Timer(10, collect, ('forecast', collect_frequency_forecast_s)).start()
