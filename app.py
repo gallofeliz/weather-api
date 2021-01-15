@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
 from meteofrance_api import MeteoFranceClient
-import requests, time, datetime, dateutil.parser, os, re
-import traceback, logging, threading
+import requests, time, datetime, dateutil.parser, os, re, logging, sched
 from influxdb import InfluxDBClient
 
 """
@@ -27,7 +26,7 @@ class SunriseSunsetProvider():
             params={'lat': latitude, 'lng': longitude, 'formatted': '0'}
         ).json()['results']
 
-        print('sunrisesunset current api response', resp)
+        logging.info('sunrisesunset current api response %s', resp)
 
         ts = int(round(time.time()))
 
@@ -92,7 +91,7 @@ class MeteoFranceProvider():
             params={'lat': latitude, 'lon': longitude, 'lang': 'fr'},
         ).json()
 
-        print('meteofrance current api response', resp)
+        logging.info('meteofrance current api response %s', resp)
 
         return resp
 
@@ -139,7 +138,7 @@ class OpenWeatherMapProvider():
             params={'appid': self.appid, 'units': 'metric', 'lat': latitude, 'lon': longitude, 'lang': 'fr'}
         ).json()
 
-        print('openweathermap current api response', resp)
+        logging.info('openweathermap current api response %s', resp)
 
         if int(resp.get('cod')) != 200:
             raise Exception('openweathermap error')
@@ -164,7 +163,7 @@ class WeatherService():
           try:
             values[providerName] = getattr(self.providers[providerName], type)(latitude, longitude)
           except Exception as e:
-            traceback.print_exc()
+            logging.exception('Provider %s read error for type %s on coordinates %s %s', providerName, type, latitude, longitude)
 
         return values
 
@@ -197,13 +196,15 @@ collect_frequency=os.environ['COLLECT_FREQUENCY_CURRENT']
 collect_frequency_s=convert_to_seconds(collect_frequency)
 
 collect_frequency_forecast=os.environ['COLLECT_FREQUENCY_FORECAST']
-collect_frequency_forecast_s=convert_to_seconds(collect_frequency)
+collect_frequency_forecast_s=convert_to_seconds(collect_frequency_forecast)
 
 influxdb_client = InfluxDBClient(os.environ['INFLUXDB_HOST'], database=os.environ['INFLUXDB_DB'])
 influxdb_measurement = os.environ['INFLUXDB_MEASUREMENT']
 
+scheduler = sched.scheduler()
+
 def collect(type, frequency):
-    threading.Timer(frequency, collect, ('current', collect_frequency_s)).start()
+    scheduler.enter(frequency, 1, collect, (type, frequency))
     logging.info('Collecting ' + type)
 
     for location, coordinates in locations.items():
@@ -233,8 +234,6 @@ def collect(type, frequency):
                 else:
                     value_to_point(values)
 
-            logging.info(points)
-
             influxdb_client.write_points(points, tags={
                 'location': location,
                 'type': type
@@ -242,8 +241,9 @@ def collect(type, frequency):
 
             logging.info('Done')
         except Exception as e:
-            traceback.print_exc()
-            logging.error('Error collecting location %s for type %s (%s)', location, type, e)
+            logging.exception('Error collecting location %s for type %s (%s)', location, type, e)
 
-threading.Timer(0, collect, ('current', collect_frequency_s)).start()
-threading.Timer(10, collect, ('forecast', collect_frequency_forecast_s)).start()
+
+collect('current', collect_frequency_s)
+collect('forecast', collect_frequency_forecast_s)
+scheduler.run()
