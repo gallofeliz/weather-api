@@ -219,6 +219,11 @@ def collect(type, frequency):
                     ts = value['timestamp']
                     del value['timestamp']
 
+                    # AAAAAAAAAAAAAAAAH
+                    for k, v in value.items():
+                        if isinstance(v, int):
+                            value[k] = float(v)
+
                     points.append({
                         'measurement': influxdb_measurement,
                         'tags': {
