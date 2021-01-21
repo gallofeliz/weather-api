@@ -1,4 +1,4 @@
-# weather-collector
+# weather-api
 
 For my use with influxdb and grafana, I wanted a agnostic API with ready to use data and multiple sources (meteofrance for wind gust for example, and other one for daylight)
 
