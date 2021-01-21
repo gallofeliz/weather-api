@@ -2,45 +2,27 @@
 
 For my use with influxdb and grafana, I wanted a agnostic API with ready to use data and multiple sources (meteofrance for wind gust for example, and other one for daylight)
 
-`OPENWEATHERMAP_APPID=blabla LOCATION_HOLIDAYS=43.2149438,5.4297272 LOCATION_HOME=48.8793772,2.3429125 DEFAULT_LOCATION=home python3 app.py`
+## How to run
 
-`sudo docker run --rm -p 8080:8080 -e OPENWEATHERMAP_APPID=blabla -e LOCATION_HOLIDAYS=43.2149438,5.4297272 -e LOCATION_HOME=48.8793772,2.3429125 -e DEFAULT_LOCATION=home weather` after build
+See docker-compose
 
-## Output
+## How to call
 
-```
-{
-    "type": "current",
-    "location": {
-        "latitude": "43.2149438",
-        "longitude": "5.4297272",
-        "alias": "holidays"
-    },
-    "values": {
-        "meteoFrance": {
-            "timestamp": 1607469480,
-            "temperature": 4.7,
-            "humidity": 75,
-            "wind": 18,
-            "windGust": 47
-        },
-        "openWeatherMap": {
-            "timestamp": 1607469698,
-            "temperature": 5.1,
-            "humidity": 75,
-            "wind": 23,
-            "windGust": 42,
-            "cloudiness": 48,
-            "icon": "https://openweathermap.org/img/wn/03n@2x.png",
-            "description": "partiellement nuageux",
-            "rain": 0.0,
-            "snow": 0.0
-        },
-        "sunriseSunset": {
-            "timestamp": 1607469700,
-            "civilDaylight": false
-        }
-    },
-    "errors": []
-}
-```
+Url template : http://localhost:8080/{lat},{lon}/{type}/{provider}
+
+Example : http://localhost:8080/48.8583701,2.2922926/current/open-weather-map
+
+## Response
+
+Weather Model (Providers provide what they can) that can be graphed
+  - timestamp:number - data time
+  - temperature:number - temperature °c
+  - humidity:number - humidity %
+  - wind:number - Wind km/h
+  - windGust:number - Wind Gust km/h
+  - cloudiness:number - Cloudiness %
+  - rain:number - rain mm/h
+  - snow:number - like rain but for snow
+  - icon:string - a full url for an icon
+  - description: string - an human description
+  - civilDaylight:boolean - if it's the day from civil twilights
