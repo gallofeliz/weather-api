@@ -24,7 +24,8 @@ class SunriseSunsetProvider():
     def __api(self, latitude, longitude):
         resp = requests.get(
             'https://api.sunrise-sunset.org/json',
-            params={'lat': latitude, 'lng': longitude, 'formatted': '0'}
+            params={'lat': latitude, 'lng': longitude, 'formatted': '0'},
+            timeout=10
         ).json()['results']
 
         logging.info('sunrisesunset current api response %s', resp)
@@ -75,6 +76,7 @@ class MeteoFranceProvider():
             'get',
             type,
             params={'lat': latitude, 'lon': longitude, 'lang': 'fr'},
+            timeout=10
         ).json()
 
         logging.info('meteofrance current api response %s', resp)
@@ -115,7 +117,8 @@ class OpenWeatherMapProvider():
     def __call(self, latitude, longitude, type):
         resp = requests.get(
             'http://api.openweathermap.org/data/2.5/' + ('weather' if type == 'current' else 'forecast'),
-            params={'appid': self.appid, 'units': 'metric', 'lat': latitude, 'lon': longitude, 'lang': 'fr'}
+            params={'appid': self.appid, 'units': 'metric', 'lat': latitude, 'lon': longitude, 'lang': 'fr'},
+            timeout=10
         ).json()
 
         logging.info('openweathermap current api response %s', resp)
