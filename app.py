@@ -3,6 +3,7 @@
 from meteofrance_api import MeteoFranceClient
 import requests, time, datetime, dateutil.parser, os, logging, socketserver, http.server, re, json
 from cachetools import cached, TTLCache
+from retrying import retry
 
 class SunriseSunsetProvider():
     def current(self, latitude, longitude):
@@ -132,6 +133,13 @@ providers = {
     'sunrise-sunset': SunriseSunsetProvider()
 }
 
+@retry(wait_fixed=5000, stop_max_attempt_number=3, stop_max_delay=30000)
+def query_provider(provider_name, type, latitude, longitude):
+    if type == 'current':
+        return providers[provider_name].current(latitude, longitude)
+
+    return providers[provider_name].forecast(latitude, longitude)
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
 
@@ -156,10 +164,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         try:
-            if type == 'current':
-                data = providers[provider].current(latitude, longitude)
-            else:
-                data = providers[provider].forecast(latitude, longitude)
+            data = query_provider(provider, type, latitude, longitude)
             self.send_response(200)
             self.send_header('Content-type','application/json')
             self.end_headers()
@@ -171,7 +176,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(bytes(str(inst), 'utf8'))
             logging.exception('Request error')
 
-httpd = socketserver.TCPServer(('', 8080), Handler)
+httpd = socketserver.ThreadingTCPServer(('', 8080), Handler)
 try:
    print('Listening')
    httpd.serve_forever()

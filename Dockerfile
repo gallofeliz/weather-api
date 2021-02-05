@@ -1,6 +1,6 @@
 FROM python:alpine
 
-RUN pip install meteofrance_api python-dateutil cachetools
+RUN pip install meteofrance_api python-dateutil cachetools retrying
 
 WORKDIR /app
 
