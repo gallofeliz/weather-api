@@ -179,6 +179,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(bytes(str(inst), 'utf8'))
             logging.exception('Request error')
 
+port = int(os.environ.get('PORT', 80))
 httpd = socketserver.ThreadingTCPServer(('', 8080), Handler)
 try:
    print('Listening')

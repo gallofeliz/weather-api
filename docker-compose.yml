@@ -6,6 +6,6 @@
      build:
        context: .
      ports:
-       - "8080:8080"
+       - "8080:80"
      environment:
        OPENWEATHERMAP_APPID: blabla

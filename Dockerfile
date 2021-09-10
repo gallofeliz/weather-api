@@ -6,4 +6,6 @@ WORKDIR /app
 
 ADD app.py .
 
+USER nobody
+
 CMD ./app.py
