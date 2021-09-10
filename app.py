@@ -180,7 +180,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             logging.exception('Request error')
 
 port = int(os.environ.get('PORT', 80))
-httpd = socketserver.ThreadingTCPServer(('', 8080), Handler)
+httpd = socketserver.ThreadingTCPServer(('', port), Handler)
 try:
    print('Listening')
    httpd.serve_forever()
