@@ -143,7 +143,7 @@ def query_provider(provider_name, type, latitude, longitude):
 
     return providers[provider_name].forecast(latitude, longitude)
 
-class Handler(http.server.SimpleHTTPRequestHandler):
+class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
 
         if (self.path == '/favicon.ico'):
