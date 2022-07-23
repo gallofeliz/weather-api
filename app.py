@@ -23,7 +23,7 @@ class SunriseSunsetProvider():
     @cached(cache=TTLCache(maxsize=64, ttl=3600))
     def __api(self, latitude, longitude):
         resp = requests.get(
-            'https://api.sunrise-sunset.org/json',
+            'http://api.sunrise-sunset.org/json',
             params={'lat': latitude, 'lng': longitude, 'formatted': '0'},
             timeout=10
         ).json()['results']
